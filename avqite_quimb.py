@@ -293,7 +293,8 @@ class Quimb_vqite:
 
 
     def vqite(self,
-              opt='greedy',
+              opt_m='greedy',
+              opt_v='greedy',
               simp = '',
               backend = None
              ):
@@ -302,7 +303,7 @@ class Quimb_vqite:
             t1 = time.time()
             if _iter==0:
                 self.compute_m(
-                    opt=opt,
+                    opt=opt_m,
                     simp=simp,
                     backend = backend,
                     which_nonzero=None
@@ -313,13 +314,13 @@ class Quimb_vqite:
                                     if non_zero_els[0][i]<=non_zero_els[1][i]]
             else:
                 self.compute_m(
-                    opt=opt,
+                    opt=opt_m,
                     simp=simp,
                     backend = backend,
                     which_nonzero=self.which_nonzero
                 )
             t2 = time.time()
-            self.compute_v(opt=opt,simp=simp,backend = backend)
+            self.compute_v(opt=opt_v,simp=simp,backend = backend)
             t3 = time.time()
             dthdt = self.get_dthdt(delta = 1e-4, m = self._m, v= self._v)
             dt = 0.02
@@ -327,7 +328,7 @@ class Quimb_vqite:
             self._params = params_new
             self._e = self.h_exp_val(
                 params = self._params,
-                opt = opt,
+                opt = opt_v,
                 simp=simp,
                 backend = backend
             )
