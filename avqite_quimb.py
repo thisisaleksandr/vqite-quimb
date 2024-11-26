@@ -2,7 +2,7 @@
 This module performs VQITE simulations using tensor-network (TN) methods.
 Quimb is the library for performing TN contractions.
 Cotengra library is used to find optimal contraction paths.
-Examples of calculations are given in the accompanying notebooks 
+Examples of calculations are given in the accompanying notebooks
 avqite_tn.ipynb and avqite_tn_timing_test.ipynb.
 
 Packages information:
@@ -80,7 +80,7 @@ class Quimb_vqite:
     _params_solution : List[float]
         Parameters of the ansatz calculated by AVQITE. These are not updated
         throughout this calculation.
-    _params : List[float]
+    params : List[float]
         Parameters of the ansatz. These are updated throughout this calculation.
         Initial guess is random.
     _m : numpy.ndarray
@@ -103,6 +103,9 @@ class Quimb_vqite:
     _base_circuits : List[quimb.tensor.circuit.Circuit]
         List of quantum circuits representing the ansatz up to ith rotation,
         where i is the index in the list.
+    h_terms_reh_dict : dict
+        Dictionary of TN "reh" dictionaries for calculating expectation value
+        of each pauli for the ansatz state.
     opt_dict : dict
         Dictionary of TN contraction paths for calculating expectation value
         of each pauli for the ansatz state.
@@ -126,8 +129,8 @@ class Quimb_vqite:
                                     "adaptvqite/adaptvqite/data/ansatz_inp.pkle"
                                     )
         #For the purposes of VQITE, we set the initial parameters to be random.
-        self._params = [random.uniform(-0.1, 0.1)
-                                    for i in range(len(self._params_solution))]
+        self.params = [random.uniform(-0.1, 0.1)
+                                    for i in range(len(self._ansatz))]
 
         self._m = np.zeros((len(self._ansatz),len(self._ansatz)))
         self._m_width = np.zeros((len(self._ansatz),len(self._ansatz)))
@@ -159,7 +162,7 @@ class Quimb_vqite:
             add_pauli_rotation_gate(
                 qc=qtn.Circuit(N=self._num_qubits),
                 pauli_string=self._ansatz[i],
-                theta=self._params[i],
+                theta=self.params[i],
                 decompose_rzz=False
                 ).gates for i in range(len(self._ansatz))
             ]
@@ -168,29 +171,12 @@ class Quimb_vqite:
             add_pauli_rotation_gate(
                 qc=qtn.Circuit(N=self._num_qubits),
                 pauli_string=self._ansatz[i],
-                theta=-self._params[i],decompose_rzz=False
+                theta=-self.params[i],decompose_rzz=False
                 ).gates for i in range(len(self._ansatz))
             ]
 
         self._base_circuits = [self.circuit_2(mu)
                                     for mu in range(len(self._ansatz)+1)]
-
-
-    def contruct_opt_dict(
-        self,
-        opt="greedy",
-        simp=""
-    ):
-        self.h_terms_find_contractions(
-            opt='greedy',
-            simp=simp
-        )
-        self.opt_dict = dict()
-        for pauli_str in self._H.paulis:
-            self.opt_dict[pauli_str] = self.h_terms_reh_dict[
-                pauli_str
-            ]['tree'].copy()
-
 
     def compute_m(self,
                   opt='greedy',
@@ -265,10 +251,10 @@ class Quimb_vqite:
                   simp = '',
                   backend=None
                  ):
-        for mu in range(len(self._params)):
-            params1 = self._params.copy()
+        for mu in range(len(self.params)):
+            params1 = self.params.copy()
             params1[mu] = params1[mu]+np.pi/2
-            params2 = self._params.copy()
+            params2 = self.params.copy()
             params2[mu] = params2[mu]-np.pi/2
             self._v[mu] = np.real(-1/2*(
                 self.h_exp_val(
@@ -324,10 +310,10 @@ class Quimb_vqite:
             t3 = time.time()
             dthdt = self.get_dthdt(delta = 1e-4, m = self._m, v= self._v)
             dt = 0.02
-            params_new = [p + pp*dt for p, pp in zip(self._params, dthdt)]
-            self._params = params_new
+            params_new = [p + pp*dt for p, pp in zip(self.params, dthdt)]
+            self.params = params_new
             self._e = self.h_exp_val(
-                params = self._params,
+                params = self.params,
                 opt = opt_v,
                 simp=simp,
                 backend = backend
@@ -350,6 +336,7 @@ class Quimb_vqite:
         simp=''
     ):
         self.h_terms_reh_dict = dict()
+        self.opt_dict = dict()
         qc = self._base_circuits[-1].copy()
         for pauli_str in self._H.paulis:
             self.h_terms_reh_dict[pauli_str] = p_str_exp_contr_path(
@@ -358,6 +345,9 @@ class Quimb_vqite:
                 opt = opt,
                 simp=simp
             )
+            self.opt_dict[pauli_str] = self.h_terms_reh_dict[
+                pauli_str
+            ]['tree']
 
 
     def h_exp_val(
