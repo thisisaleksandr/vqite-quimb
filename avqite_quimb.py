@@ -32,6 +32,7 @@ import quimb.tensor as qtn
 
 import cotengra as ctg
 
+
 class model_H:
     """
     Class for Hamiltonians constructed using incar_file.
@@ -71,8 +72,14 @@ class Quimb_vqite:
 
     Attributes:
     -----------
-    _filename : str
-        Filename of the incar file to read the Hamiltonian from.
+    _incar_file : str
+        Path to the incar file.
+        Incar file is used to read out the Hamiltonian and the reference state.
+    _ansatz_file : str
+        Path to the ansatz file.
+    _init_params : str
+        What initial parameters to use for the ansatz.
+        Possible options: random and avqite.
     _num_qubits : int
         Number of qubits in the system. Determined from the incar file.
     _ansatz : List[str]
@@ -80,7 +87,7 @@ class Quimb_vqite:
     _params_solution : List[float]
         Parameters of the ansatz calculated by AVQITE. These are not updated
         throughout this calculation.
-    params : List[float]
+    _params : List[float]
         Parameters of the ansatz. These are updated throughout this calculation.
         Initial guess is random.
     _m : numpy.ndarray
@@ -112,26 +119,37 @@ class Quimb_vqite:
     """
     def __init__(
         self,
-        filename: str,
+        incar_file: str,
+        ansatz_file: str,
+        init_params = "random"
     ):
-        self._filename = filename
+        self._incar_file = incar_file
+        self._ansatz_file = ansatz_file
+        self._init_params = init_params
 
         #Reads out the Hamiltonian from the incar file.
         #The number of qubits is determined from there.
-        self._H = model_H("adaptvqite/adaptvqite/incars/incar"+self._filename)
+        self._H = model_H(self._incar_file)
         self._num_qubits = len(self._H.paulis[0])
 
         #Reads out the form of the ansatz and the parameters of the ansatz from
         #the ansatz file.
         #The ansatz file should be in the AVQITE format.
         (self._ansatz,
-         self._params_solution) = read_adaptvqite_ansatz(
-                                    "adaptvqite/adaptvqite/data/ansatz_inp.pkle"
-                                    )
-        #For the purposes of VQITE, we set the initial parameters to be random.
-        self.params = [random.uniform(-0.1, 0.1)
-                                    for i in range(len(self._ansatz))]
+         self._params_solution) = read_adaptvqite_ansatz(self._ansatz_file)
+        #For the purposes of VQITE, we might want to set the initial parameters 
+        #to be random.
+        if self._init_params == "random":
+            self._params = [random.uniform(-0.1, 0.1)
+                                        for i in range(len(self._ansatz))]
+        elif self._init_params == "avqite":
+            self._params = self._params_solution.copy()
+        else:
+            raise NotImplementedError(
+                "init_parameters has to be either random or avqite"
+            )
 
+        #Matrix M and cvctor V used in VQITE.
         self._m = np.zeros((len(self._ansatz),len(self._ansatz)))
         self._m_width = np.zeros((len(self._ansatz),len(self._ansatz)))
         self._m_cost = np.zeros((len(self._ansatz),len(self._ansatz)))
@@ -139,7 +157,7 @@ class Quimb_vqite:
         self._v = np.zeros(len(self._ansatz))
 
         #Reads out the incar file.
-        with open("adaptvqite/adaptvqite/incars/incar"+self._filename) as fp:
+        with open(self._incar_file) as fp:
             incar_content = fp.read()
         ref_st_r_pos = incar_content.find("ref_state")
         #Reads out the reference state from the incar file.
@@ -157,33 +175,53 @@ class Quimb_vqite:
             raise ValueError(
                 "Reference state is supposed to be a string of 0s and 1s"
             )
-
+        #Creates a set and saves of gates in Quimb corresponding to Pauli rotations
+        #(and their inverse) from the ansatz.
+        #This will be used throghout the calculations.
         self._pauli_rot_gates_list = [
             add_pauli_rotation_gate(
                 qc=qtn.Circuit(N=self._num_qubits),
                 pauli_string=self._ansatz[i],
-                theta=self.params[i],
+                theta=self._params[i],
                 decompose_rzz=False
                 ).gates for i in range(len(self._ansatz))
             ]
-
         self._pauli_rot_dag_gates_list = [
             add_pauli_rotation_gate(
                 qc=qtn.Circuit(N=self._num_qubits),
                 pauli_string=self._ansatz[i],
-                theta=-self.params[i],decompose_rzz=False
+                theta=-self._params[i],decompose_rzz=False
                 ).gates for i in range(len(self._ansatz))
             ]
-
+        #Creates and saves circuits in Quimb correspondning to the product of 
+        #Pauli rotations up to mu'th rotation in the ansatz list, where
+        #mu is the index.
+        #This will be used throghout the calculations.
         self._base_circuits = [self.circuit_2(mu)
                                     for mu in range(len(self._ansatz)+1)]
 
+    
     def compute_m(self,
                   opt='greedy',
                   simp = '',
                   backend=None,
                   which_nonzero=None
                  ):
+        """
+        Computes matrix M in VQITE.
+
+        Parameters:
+        -----------
+        opt : str
+            Optimizer to use when looking for contraction paths.
+        simp : str
+            TN simplifications to use when looking for contraction paths.
+        backend : str
+            Backend to use when performing the contractions.
+            Usually specified if GPU acceleration is needed.
+        which_nonzero : List[int]
+            Indices of matrix M that are known to be nonzero
+        """
         if which_nonzero==None:
             for nu in range(len(self._ansatz)):
                 for mu in range(nu+1):
@@ -251,10 +289,10 @@ class Quimb_vqite:
                   simp = '',
                   backend=None
                  ):
-        for mu in range(len(self.params)):
-            params1 = self.params.copy()
+        for mu in range(len(self._params)):
+            params1 = self._params.copy()
             params1[mu] = params1[mu]+np.pi/2
-            params2 = self.params.copy()
+            params2 = self._params.copy()
             params2[mu] = params2[mu]-np.pi/2
             self._v[mu] = np.real(-1/2*(
                 self.h_exp_val(
@@ -310,10 +348,10 @@ class Quimb_vqite:
             t3 = time.time()
             dthdt = self.get_dthdt(delta = 1e-4, m = self._m, v= self._v)
             dt = 0.02
-            params_new = [p + pp*dt for p, pp in zip(self.params, dthdt)]
-            self.params = params_new
+            params_new = [p + pp*dt for p, pp in zip(self._params, dthdt)]
+            self._params = params_new
             self._e = self.h_exp_val(
-                params = self.params,
+                params = self._params,
                 opt = opt_v,
                 simp=simp,
                 backend = backend
@@ -657,7 +695,6 @@ def read_adaptvqite_ansatz(
         data_inp = pickle.load(inp)
         ansatz_adaptvqite = data_inp[0]
         params_adaptvqite = data_inp[1]
-        # params_adaptvqite = list(np.random.random(20))
 
     return ansatz_adaptvqite, params_adaptvqite
 
