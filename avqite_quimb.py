@@ -3,7 +3,7 @@ This module performs VQITE simulations using tensor-network (TN) methods.
 Quimb is the library for performing TN contractions.
 Cotengra library is used to find optimal contraction paths.
 Examples of calculations are given in the accompanying notebooks
-avqite_tn.ipynb and avqite_tn_timing_test.ipynb.
+vqi.ipynb and avqite_quimb_timing_test_and_MV_avqite_comparison.ipynb.
 
 Packages information:
 ---------------------
@@ -113,7 +113,7 @@ class Quimb_vqite:
     h_terms_reh_dict : dict
         Dictionary of TN "reh" dictionaries for calculating expectation value
         of each pauli for the ansatz state.
-    opt_dict : dict
+    optimize_dict : dict
         Dictionary of TN contraction paths for calculating expectation value
         of each pauli for the ansatz state.
     """
@@ -137,7 +137,7 @@ class Quimb_vqite:
         #The ansatz file should be in the AVQITE format.
         (self._ansatz,
          self._params_solution) = read_adaptvqite_ansatz(self._ansatz_file)
-        #For the purposes of VQITE, we might want to set the initial parameters 
+        #For the purposes of VQITE, we might want to set the initial parameters
         #to be random.
         if self._init_params == "random":
             self._params = [random.uniform(-0.1, 0.1)
@@ -146,7 +146,7 @@ class Quimb_vqite:
             self._params = self._params_solution.copy()
         else:
             raise NotImplementedError(
-                "init_parameters has to be either random or avqite"
+                "self._init_params has to be either random or avqite"
             )
 
         #Matrix M and cvctor V used in VQITE.
@@ -184,69 +184,55 @@ class Quimb_vqite:
                 pauli_string=self._ansatz[i],
                 theta=self._params[i],
                 decompose_rzz=False
-                ).gates for i in range(len(self._ansatz))
-            ]
+            ).gates for i in range(len(self._ansatz))
+        ]
         self._pauli_rot_dag_gates_list = [
             add_pauli_rotation_gate(
                 qc=qtn.Circuit(N=self._num_qubits),
                 pauli_string=self._ansatz[i],
-                theta=-self._params[i],decompose_rzz=False
-                ).gates for i in range(len(self._ansatz))
-            ]
-        #Creates and saves circuits in Quimb correspondning to the product of 
+                theta=-self._params[i],
+                decompose_rzz=False
+            ).gates for i in range(len(self._ansatz))
+        ]
+        #Creates and saves circuits in Quimb correspondning to the product of
         #Pauli rotations up to mu'th rotation in the ansatz list, where
         #mu is the index.
         #This will be used throghout the calculations.
         self._base_circuits = [self.circuit_2(mu)
                                     for mu in range(len(self._ansatz)+1)]
 
-    
-    def compute_m(self,
-                  opt='greedy',
-                  simp = '',
-                  backend=None,
-                  which_nonzero=None
-                 ):
+
+    def compute_m(self, which_nonzero=None, **kwargs):
         """
         Computes matrix M in VQITE.
 
         Parameters:
         -----------
-        opt : str
-            Optimizer to use when looking for contraction paths.
-        simp : str
-            TN simplifications to use when looking for contraction paths.
-        backend : str
-            Backend to use when performing the contractions.
-            Usually specified if GPU acceleration is needed.
         which_nonzero : List[int]
-            Indices of matrix M that are known to be nonzero
+            Indices of matrix M that are known to be nonzero.
+        **kwargs
+            Arguments used in Quimb methods for tensor contraction 
+            evaluations, such as:
+                optimize : str
+                    Optimizer to use when looking for contraction paths.
+                simplify_sequence : str
+                    TN simplifications to use when looking for contraction paths.
+                backend : str
+                    Backend to use when performing the contractions.
+                    Usually specified if GPU acceleration is needed.
+                ...
         """
+        #If which_nonzero==None, calculating the entire matrix.
         if which_nonzero==None:
             for nu in range(len(self._ansatz)):
                 for mu in range(nu+1):
-                    contr_mu_nu=self.avqite_contr1_est(
-                        mu = mu,
-                        nu = nu,
-                        opt=opt,
-                        simp=simp,
-                        backend = backend
-                    )
+                    contr_mu_nu=self.avqite_contr1_est(mu=mu, nu=nu, **kwargs)
                     self._m[mu,nu] = (
                         contr_mu_nu[-1] +
-                        self.avqite_contr2_est(
-                            mu = mu,
-                            opt=opt,
-                            simp=simp,
-                            backend = backend
-                        )[-1]*
-                        self.avqite_contr2_est(
-                            mu = nu,
-                            opt=opt,
-                            simp=simp,
-                            backend = backend
-                        )[-1]
+                        self.avqite_contr2_est(mu=mu, **kwargs)[-1]*
+                        self.avqite_contr2_est(mu=nu, **kwargs)[-1]
                     )
+                    #Matrix M is symmetric
                     self._m[nu,mu] = self._m[mu,nu]
                     (self._m_width[mu,nu],
                     self._m_cost[mu,nu]) = (contr_mu_nu[0],contr_mu_nu[1])
@@ -255,27 +241,11 @@ class Quimb_vqite:
         else:
             self._m = np.zeros((len(self._ansatz),len(self._ansatz)))
             for mu,nu in which_nonzero:
-                contr_mu_nu=self.avqite_contr1_est(
-                    mu = mu,
-                    nu = nu,
-                    opt=opt,
-                    simp=simp,
-                    backend = backend
-                )
+                contr_mu_nu=self.avqite_contr1_est(mu=mu, nu=nu, **kwargs)
                 self._m[mu,nu] = (
                     contr_mu_nu[-1] +
-                    self.avqite_contr2_est(
-                        mu = mu,
-                        opt=opt,
-                        simp=simp,
-                        backend = backend
-                    )[-1]*
-                    self.avqite_contr2_est(
-                        mu = nu,
-                        opt=opt,
-                        simp=simp,
-                        backend = backend
-                    )[-1]
+                    self.avqite_contr2_est(mu = mu, **kwargs)[-1]*
+                    self.avqite_contr2_est(mu = nu, **kwargs)[-1]
                 )
                 self._m[nu,mu] = self._m[mu,nu]
                 (self._m_width[mu,nu],
@@ -284,77 +254,124 @@ class Quimb_vqite:
                 self._m_cost[nu,mu] = self._m_cost[mu,nu]
 
 
-    def compute_v(self,
-                  opt='greedy',
-                  simp = '',
-                  backend=None
-                 ):
+    def compute_v(self, **kwargs):
+        """
+        Computes vector V in VQITE using parameter shift rule.
+
+        Parameters:
+        -----------
+        **kwargs
+            Arguments used in Quimb methods for tensor contraction 
+            evaluations, such as:
+                optimize : str
+                    Optimizer to use when looking for contraction paths.
+                simplify_sequence : str
+                    TN simplifications to use when looking for contraction paths.
+                backend : str
+                    Backend to use when performing the contractions.
+                    Usually specified if GPU acceleration is needed.
+                ...
+        """
         for mu in range(len(self._params)):
             params1 = self._params.copy()
             params1[mu] = params1[mu]+np.pi/2
             params2 = self._params.copy()
             params2[mu] = params2[mu]-np.pi/2
-            self._v[mu] = np.real(-1/2*(
-                self.h_exp_val(
-                    params = params1,
-                    opt = opt,
-                    simp=simp,
-                    backend = backend
-                ) -
-                self.h_exp_val(
-                    params = params2,
-                    opt = opt,
-                    simp=simp,
-                    backend = backend)
-            ) / 2 )
+            self._v[mu] = np.real(
+                -1/2*(
+                    self.h_exp_val(params=params1, **kwargs) -
+                    self.h_exp_val(params=params2, **kwargs)
+                ) / 2
+            )
 
 
-    def get_dthdt(self,delta, m, v):
+    def get_dthdt(self, delta, m, v):
+        """
+        Computes parameter vector gradient.
+
+        Parameters:
+        -----------
+        delta : float
+            Tikhonov regularization parameter for computing inverse of a matrix.
+        m : numpy.ndarray
+            Matrix M.
+        v : numpy.ndarray
+            Vector V.
+        """
         a = m + delta*np.eye(m.shape[0])
         ainv = np.linalg.inv(a)
         dthdt = ainv.dot(v)
         return dthdt
 
 
-    def vqite(self,
-              opt_m='greedy',
-              opt_v='greedy',
-              simp = '',
-              backend = None
-             ):
+    def vqite(
+        self,
+        delta = 1e-4,
+        dt = 0.02,
+        optimize_m='greedy',
+        optimize_v='greedy',
+        **kwargs
+    ):
+        """
+        Performs VQITE routine.
+        
+        Parameters:
+        -----------
+        delta : float
+            Tikhonov regularization parameter for computing inverse of a matrix.
+        dt : float
+            Imaginary time step.
+        optimize_m : string
+            Optimizer to use when looking for contraction paths for M matrix.
+        optimize_v : string or dict[cotengra.core.ContractionTree]
+            Optimizer to use when looking for contraction paths for V vector.
+            If dict, then entries should correspond to a contraction tree for 
+            each Pauli in the Hamiltonian (this is to reuse contraction paths).
+        **kwargs
+            Arguments used in Quimb methods for tensor contraction 
+            evaluations, such as (note that optimize parameter is specified
+            separately):
+                simplify_sequence : str
+                    TN simplifications to use when looking for contraction paths.
+                backend : str
+                    Backend to use when performing the contractions.
+                    Usually specified if GPU acceleration is needed.
+                ...
+        """
         _iter=0
         while True:
             t1 = time.time()
             if _iter==0:
+                #For the first iteration, need to compute the entire matrix
+                #since it is not known a priori which elements are zero.
                 self.compute_m(
-                    opt=opt_m,
-                    simp=simp,
-                    backend = backend,
-                    which_nonzero=None
+                    optimize=optimize_m,
+                    which_nonzero=None,
+                    **kwargs
                 )
+                #Save locations of nonzero elements.
                 non_zero_els = np.where((np.abs(self._m)>1e-14) == True)
                 self.which_nonzero = [(non_zero_els[0][i],non_zero_els[1][i])
                                     for i in range(len(non_zero_els[0]))
                                     if non_zero_els[0][i]<=non_zero_els[1][i]]
             else:
+                #For iterations after the first one, need to compute only
+                #nonzero elements
                 self.compute_m(
-                    opt=opt_m,
-                    simp=simp,
-                    backend = backend,
-                    which_nonzero=self.which_nonzero
+                    optimize=optimize_m,
+                    which_nonzero=self.which_nonzero,
+                    **kwargs
                 )
             t2 = time.time()
-            self.compute_v(opt=opt_v,simp=simp,backend = backend)
+            self.compute_v(optimize=optimize_v,**kwargs)
             t3 = time.time()
-            dthdt = self.get_dthdt(delta = 1e-4, m = self._m, v= self._v)
-            dt = 0.02
+            dthdt = self.get_dthdt(delta = delta, m = self._m, v= self._v)
             params_new = [p + pp*dt for p, pp in zip(self._params, dthdt)]
             self._params = params_new
             self._e = self.h_exp_val(
                 params = self._params,
-                opt = opt_v,
-                simp=simp,
-                backend = backend
+                optimize = optimize_v,
+                **kwargs
             )
             print(
                 "iter: ",_iter,
@@ -363,6 +380,7 @@ class Quimb_vqite:
                 ", Energy: ", self._e
             )
             self._vmax = np.max(np.abs(self._v))
+            #Convergence condition.
             if self._vmax < 1e-4:
                 break
             _iter+=1
@@ -370,20 +388,18 @@ class Quimb_vqite:
 
     def h_terms_find_contractions(
         self,
-        opt='greedy',
-        simp=''
+        **kwargs
     ):
         self.h_terms_reh_dict = dict()
-        self.opt_dict = dict()
+        self.optimize_dict = dict()
         qc = self._base_circuits[-1].copy()
         for pauli_str in self._H.paulis:
             self.h_terms_reh_dict[pauli_str] = p_str_exp_contr_path(
                 qc = qc,
                 pauli_str = pauli_str,
-                opt = opt,
-                simp=simp
+                **kwargs
             )
-            self.opt_dict[pauli_str] = self.h_terms_reh_dict[
+            self.optimize_dict[pauli_str] = self.h_terms_reh_dict[
                 pauli_str
             ]['tree']
 
@@ -391,9 +407,8 @@ class Quimb_vqite:
     def h_exp_val(
         self,
         params = None,
-        opt = 'greedy',
-        simp='',
-        backend = None
+        optimize = 'greedy',
+        **kwargs
     ):
         qc = self._base_circuits[-1].copy()
 
@@ -406,22 +421,20 @@ class Quimb_vqite:
 
         h_exp_vals = []
         for pauli_str in self._H.paulis:
-            if type(opt) == dict:
+            if type(optimize) == dict:
                 exp_val = p_str_exp_eval(
                     qc=qc,
                     pauli_str=pauli_str,
-                    opt = opt[pauli_str],
-                    simp=simp,
-                    backend = backend
+                    optimize = optimize[pauli_str],
+                    **kwargs
                 )
                 h_exp_vals.append(exp_val)
             else:
                 h_exp_vals.append( p_str_exp_eval(
                     qc=qc,
                     pauli_str=pauli_str,
-                    opt = opt,
-                    simp=simp,
-                    backend = backend
+                    optimize = optimize,
+                    **kwargs
                 ) )
         exp_value = sum([h_exp_vals[i]*self._H.coefs[i]
                                     for i in range(len(self._H.coefs))])
@@ -472,9 +485,8 @@ class Quimb_vqite:
         self,
         mu: int,
         nu: int,
-        opt = 'greedy',
-        simp = '',
-        backend = None
+        backend = None,
+        **kwargs
     ):
         if mu > len(self._ansatz) or nu > len(self._ansatz):
             raise ValueError("mu, nu has to be smaller than "
@@ -490,8 +502,7 @@ class Quimb_vqite:
             )
             reh = qc.amplitude_rehearse(
                 '0'*self._num_qubits,
-                optimize=opt,
-                simplify_sequence=simp
+                **kwargs
             )
             width, cost = reh['W'], reh['C']
             contraction = reh['tn'].contract(
@@ -509,9 +520,8 @@ class Quimb_vqite:
     def avqite_contr2_est(
         self,
         mu: int,
-        opt = 'greedy',
-        simp='',
-        backend = None
+        backend = None,
+        **kwargs
     ):
         if mu > len(self._ansatz):
             raise ValueError("mu has to be smaller than "
@@ -520,8 +530,7 @@ class Quimb_vqite:
         reh = p_str_exp_contr_path(
             qc = qc,
             pauli_str = self._ansatz[mu],
-            opt = opt,
-            simp=simp
+            **kwargs
         )
         contraction = reh['tn'].contract(
             all,
@@ -699,9 +708,7 @@ def read_adaptvqite_ansatz(
     return ansatz_adaptvqite, params_adaptvqite
 
 
-def pauli_string_to_quimb_gates(
-    pauli_string
-):
+def pauli_string_to_quimb_gates(pauli_string):
     """
     Converts a Pauli string into a Quimb gate.
     """
@@ -731,8 +738,7 @@ def pauli_string_to_quimb_gates(
 def p_str_exp_contr_path(
     qc,
     pauli_str: str,
-    opt = 'greedy',
-    simp = ''
+    **kwargs
 ):
     """
     Constucts a contraction path for a TN evaluating the expectation value of a
@@ -743,13 +749,18 @@ def p_str_exp_contr_path(
     qc : quimb.tensor.circuit.Circuit
         Quantum circuit representing a state for which the expectation value
         is computed.
-    pauli_str : str
-        Pauli string representing an observable.
-    opt : str
-        Optimizer to use when looking for a contraction path.
-    simp : str
-        TN simplifications to use when looking for a contraction path.
-
+    **kwargs
+        Arguments used in Quimb methods for tensor contraction 
+        evaluations, such as:
+            optimize : str
+                Optimizer to use when looking for contraction paths.
+            simplify_sequence : str
+                TN simplifications to use when looking for contraction paths.
+            backend : str
+                Backend to use when performing the contractions.
+                Usually specified if GPU acceleration is needed.
+            ...
+            
     Returns:
     --------
     reh : dict
@@ -765,8 +776,7 @@ def p_str_exp_contr_path(
     reh = qc.local_expectation_rehearse(
         operator,
         where,
-        optimize=opt,
-        simplify_sequence=simp
+        **kwargs
     )
     return reh
 
@@ -774,9 +784,7 @@ def p_str_exp_contr_path(
 def p_str_exp_eval(
     qc,
     pauli_str: str,
-    opt = 'greedy',
-    simp = '',
-    backend = None,
+    **kwargs
 ):
     """
     Evaluates the expectation value of a Pauli string using TN contraction.
@@ -788,13 +796,17 @@ def p_str_exp_eval(
         is computed.
     pauli_str : str
         Pauli string representing an observable.
-    opt : str
-        Optimizer to use when looking for a contraction path.
-    simp : str
-        TN simplifications to use when looking for a contraction path.
-    backend : str
-        Backend to use when performing the contractions.
-        Usually specified if GPU acceleration is needed.
+    **kwargs
+        Arguments used in Quimb methods for tensor contraction 
+        evaluations, such as:
+            optimize : str
+                Optimizer to use when looking for contraction paths.
+            simplify_sequence : str
+                TN simplifications to use when looking for contraction paths.
+            backend : str
+                Backend to use when performing the contractions.
+                Usually specified if GPU acceleration is needed.
+            ...
     """
     where = [i for i,p in enumerate(pauli_str) if p!= 'I']
     paulis = [p for i,p in enumerate(pauli_str) if p!= 'I']
@@ -804,8 +816,6 @@ def p_str_exp_eval(
     exp_val = qc.local_expectation(
         operator,
         where,
-        optimize=opt,
-        simplify_sequence=simp,
-        backend=backend
+        **kwargs
     )
     return exp_val
