@@ -26,6 +26,7 @@ from typing import (
     Union
 )
 import random
+from mpi4py import MPI
 
 import quimb as qu
 import quimb.tensor as qtn
@@ -79,7 +80,7 @@ class Quimb_vqite:
         Path to the ansatz file.
     _init_params : str
         What initial parameters to use for the ansatz.
-        Possible options: random and avqite.
+        Possible options: 'random', 'avqite' or a list of parameters.
     _num_qubits : int
         Number of qubits in the system. Determined from the incar file.
     _ansatz : List[str]
@@ -127,6 +128,10 @@ class Quimb_vqite:
         self._ansatz_file = ansatz_file
         self._init_params = init_params
 
+        self._comm = MPI.COMM_WORLD
+        self._size = self._comm.Get_size()
+        self._rank = self._comm.Get_rank()
+
         #Reads out the Hamiltonian from the incar file.
         #The number of qubits is determined from there.
         self._H = model_H(self._incar_file)
@@ -144,9 +149,11 @@ class Quimb_vqite:
                                         for i in range(len(self._ansatz))]
         elif self._init_params == "avqite":
             self._params = self._params_solution.copy()
+        elif type(self._init_params)==list and len(self._init_params)==len(self._ansatz):
+            self._params = self._init_params.copy()
         else:
             raise NotImplementedError(
-                "self._init_params has to be either random or avqite"
+                "self._init_params has to be either random, avqite, or a list"
             )
 
         #Matrix M and cvctor V used in VQITE.
@@ -224,35 +231,68 @@ class Quimb_vqite:
         """
         #If which_nonzero==None, calculating the entire matrix.
         if which_nonzero==None:
-            for nu in range(len(self._ansatz)):
-                for mu in range(nu+1):
-                    contr_mu_nu=self.avqite_contr1_est(mu=mu, nu=nu, **kwargs)
-                    self._m[mu,nu] = (
-                        contr_mu_nu[-1] +
-                        self.avqite_contr2_est(mu=mu, **kwargs)[-1]*
-                        self.avqite_contr2_est(mu=nu, **kwargs)[-1]
-                    )
-                    #Matrix M is symmetric
-                    self._m[nu,mu] = self._m[mu,nu]
-                    (self._m_width[mu,nu],
-                    self._m_cost[mu,nu]) = (contr_mu_nu[0],contr_mu_nu[1])
-                    self._m_width[nu,mu] = self._m_width[mu,nu]
-                    self._m_cost[nu,mu] = self._m_cost[mu,nu]
+            ind_list = [(mu,nu) 
+                        for nu in range(len(self._ansatz)) 
+                        for mu in range(nu+1)]
         else:
-            self._m = np.zeros((len(self._ansatz),len(self._ansatz)))
-            for mu,nu in which_nonzero:
-                contr_mu_nu=self.avqite_contr1_est(mu=mu, nu=nu, **kwargs)
-                self._m[mu,nu] = (
-                    contr_mu_nu[-1] +
-                    self.avqite_contr2_est(mu = mu, **kwargs)[-1]*
-                    self.avqite_contr2_est(mu = nu, **kwargs)[-1]
-                )
-                self._m[nu,mu] = self._m[mu,nu]
-                (self._m_width[mu,nu],
-                self._m_cost[mu,nu]) = (contr_mu_nu[0],contr_mu_nu[1])
-                self._m_width[nu,mu] = self._m_width[mu,nu]
-                self._m_cost[nu,mu] = self._m_cost[mu,nu]
+            ind_list = which_nonzero
 
+        indices_range = int(len(ind_list)/self._size) + 1
+        start = self._rank*indices_range
+        end = ( (self._rank+1)*indices_range 
+           if (self._rank+1)*indices_range <= len(ind_list)
+           else len(ind_list) )
+
+        m_interm = np.zeros(end-start) 
+        m_interm_cost = np.zeros(end-start) 
+        m_interm_width = np.zeros(end-start) 
+        
+        m_nonzero = np.zeros(len(ind_list))
+        m_nonzero_cost = np.zeros(len(ind_list))
+        m_nonzero_width = np.zeros(len(ind_list))
+
+        for i,(mu,nu) in enumerate(ind_list[start:end]):
+            contr_mu_nu=self.avqite_contr1_est(mu=mu, nu=nu, **kwargs)
+            m_interm[i] = (
+                contr_mu_nu[-1] +
+                self.avqite_contr2_est(mu = mu, **kwargs)[-1]*
+                self.avqite_contr2_est(mu = nu, **kwargs)[-1]
+            )
+            (m_interm_width[i],
+            m_interm_cost[i]) = (contr_mu_nu[0],contr_mu_nu[1])
+
+        sendcountes=tuple([indices_range for i in range(self._size-1)] + 
+              [len(ind_list) - (self._size-1)*indices_range])
+        displacements=tuple([i*indices_range for i in range(self._size)])
+
+        self._comm.Allgatherv(
+            [m_interm,  MPI.DOUBLE], 
+            [m_nonzero, sendcountes, displacements, MPI.DOUBLE]
+        )
+        self._comm.Allgatherv(
+            [m_interm_cost,  MPI.DOUBLE], 
+            [m_nonzero_cost, sendcountes, displacements, MPI.DOUBLE]
+        )
+        self._comm.Allgatherv(
+            [m_interm_width,  MPI.DOUBLE], 
+            [m_nonzero_width, sendcountes, displacements, MPI.DOUBLE]
+        )
+        
+        self._m = np.zeros((len(self._ansatz),len(self._ansatz)))
+        for i in range(len(ind_list)):
+            self._m[ind_list[i]] = m_nonzero[i]
+            self._m[ind_list[i][::-1]] = m_nonzero[i]
+
+        self._m_width = np.zeros((len(self._ansatz),len(self._ansatz)))
+        for i in range(len(ind_list)):
+            self._m_width[ind_list[i]] = m_nonzero_width[i]
+            self._m_width[ind_list[i][::-1]] = m_nonzero_width[i]
+
+        self._m_cost = np.zeros((len(self._ansatz),len(self._ansatz)))
+        for i in range(len(ind_list)):
+            self._m_cost[ind_list[i]] = m_nonzero_cost[i]
+            self._m_cost[ind_list[i][::-1]] = m_nonzero_cost[i]
+            
 
     def compute_v(self, **kwargs):
         """
@@ -272,17 +312,35 @@ class Quimb_vqite:
                     Usually specified if GPU acceleration is needed.
                 ...
         """
-        for mu in range(len(self._params)):
+
+        indices_range = int(len(self._params)/self._size) + 1
+        start = self._rank*indices_range
+        end = ( (self._rank+1)*indices_range 
+               if (self._rank+1)*indices_range <= len(self._params) 
+               else len(self._params) )
+        
+        v_iterm = np.zeros(end-start) 
+        
+        for i,mu in enumerate(range(start, end)):
             params1 = self._params.copy()
             params1[mu] = params1[mu]+np.pi/2
             params2 = self._params.copy()
             params2[mu] = params2[mu]-np.pi/2
-            self._v[mu] = np.real(
+            v_iterm[i] = np.real(
                 -1/2*(
                     self.h_exp_val(params=params1, **kwargs) -
                     self.h_exp_val(params=params2, **kwargs)
                 ) / 2
             )
+            
+        sendcountes=tuple([indices_range for i in range(self._size-1)] + 
+                          [len(self._params) - (self._size-1)*indices_range])
+        displacements=tuple([i*indices_range for i in range(self._size)])
+
+        self._comm.Allgatherv(
+            [v_iterm,  MPI.DOUBLE], 
+            [self._v, sendcountes, displacements, MPI.DOUBLE]
+        )
 
 
     def get_dthdt(self, delta, m, v):
@@ -338,9 +396,10 @@ class Quimb_vqite:
                     Usually specified if GPU acceleration is needed.
                 ...
         """
+        
         _iter=0
         while True:
-            t1 = time.time()
+            t1 = MPI.Wtime()
             if _iter==0:
                 #For the first iteration, need to compute the entire matrix
                 #since it is not known a priori which elements are zero.
@@ -362,9 +421,9 @@ class Quimb_vqite:
                     which_nonzero=self.which_nonzero,
                     **kwargs
                 )
-            t2 = time.time()
+            t2 = MPI.Wtime()
             self.compute_v(optimize=optimize_v,**kwargs)
-            t3 = time.time()
+            t3 = MPI.Wtime()
             dthdt = self.get_dthdt(delta = delta, m = self._m, v= self._v)
             params_new = [p + pp*dt for p, pp in zip(self._params, dthdt)]
             self._params = params_new
@@ -373,12 +432,15 @@ class Quimb_vqite:
                 optimize = optimize_v,
                 **kwargs
             )
-            print(
-                "iter: ",_iter,
-                ", M matrix time: ", t2-t1,
-                ", V vector time: ", t3-t2,
-                ", Energy: ", self._e
-            )
+            if self._rank==0:
+                with open("output.txt", "a") as f:
+                    print(
+                        "iter: ",_iter,
+                        ", M matrix time: ", t2-t1,
+                        ", V vector time: ", t3-t2,
+                        ", Energy: ", self._e,
+                        file=f
+                    )
             self._vmax = np.max(np.abs(self._v))
             #Convergence condition.
             if self._vmax < 1e-4:
