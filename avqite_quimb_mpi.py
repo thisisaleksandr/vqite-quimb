@@ -237,12 +237,14 @@ class Quimb_vqite:
         else:
             ind_list = which_nonzero
 
-        indices_range = int(len(ind_list)/self._size) + 1
-        start = self._rank*indices_range
-        end = ( (self._rank+1)*indices_range 
-           if (self._rank+1)*indices_range <= len(ind_list)
-           else len(ind_list) )
+        bins_sizes = [int(len(ind_list)/self._size) for i in range(self._size)]
+        
+        for i in range(len(ind_list) - int(len(ind_list)/self._size)*self._size):
+            bins_sizes[i] = bins_sizes[i]+1
 
+        start = sum(bins_sizes[:self._rank])
+        end = start + bins_sizes[self._rank]
+        
         m_interm = np.zeros(end-start) 
         m_interm_cost = np.zeros(end-start) 
         m_interm_width = np.zeros(end-start) 
@@ -261,10 +263,9 @@ class Quimb_vqite:
             (m_interm_width[i],
             m_interm_cost[i]) = (contr_mu_nu[0],contr_mu_nu[1])
 
-        sendcountes=tuple([indices_range for i in range(self._size-1)] + 
-              [len(ind_list) - (self._size-1)*indices_range])
-        displacements=tuple([i*indices_range for i in range(self._size)])
-
+        sendcountes=tuple(bins_sizes)
+        displacements=tuple([sum(bins_sizes[:i]) for i in range(self._size)])
+        
         self._comm.Allgatherv(
             [m_interm,  MPI.DOUBLE], 
             [m_nonzero, sendcountes, displacements, MPI.DOUBLE]
@@ -313,11 +314,14 @@ class Quimb_vqite:
                 ...
         """
 
-        indices_range = int(len(self._params)/self._size) + 1
-        start = self._rank*indices_range
-        end = ( (self._rank+1)*indices_range 
-               if (self._rank+1)*indices_range <= len(self._params) 
-               else len(self._params) )
+
+        bins_sizes = [int(len(self._params)/self._size) for i in range(self._size)]
+        
+        for i in range(len(self._params) - int(len(self._params)/self._size)*self._size):
+            bins_sizes[i] = bins_sizes[i]+1
+
+        start = sum(bins_sizes[:self._rank])
+        end = start + bins_sizes[self._rank]
         
         v_iterm = np.zeros(end-start) 
         
@@ -333,9 +337,8 @@ class Quimb_vqite:
                 ) / 2
             )
             
-        sendcountes=tuple([indices_range for i in range(self._size-1)] + 
-                          [len(self._params) - (self._size-1)*indices_range])
-        displacements=tuple([i*indices_range for i in range(self._size)])
+        sendcountes=tuple(bins_sizes)
+        displacements=tuple([sum(bins_sizes[:i]) for i in range(self._size)])
 
         self._comm.Allgatherv(
             [v_iterm,  MPI.DOUBLE], 
