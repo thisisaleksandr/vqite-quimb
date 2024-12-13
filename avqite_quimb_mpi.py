@@ -88,9 +88,8 @@ class Quimb_vqite:
     _params_solution : List[float]
         Parameters of the ansatz calculated by AVQITE. These are not updated
         throughout this calculation.
-    _params : List[float]
+    params : List[float]
         Parameters of the ansatz. These are updated throughout this calculation.
-        Initial guess is random.
     _m : numpy.ndarray
         M matrix used in VQITE.
     _m_width : numpy.ndarray
@@ -145,12 +144,12 @@ class Quimb_vqite:
         #For the purposes of VQITE, we might want to set the initial parameters
         #to be random.
         if self._init_params == "random":
-            self._params = [random.uniform(-0.1, 0.1)
-                                        for i in range(len(self._ansatz))]
+            self.params = [self._params_solution[i]+random.uniform(-0.05, 0.05)
+                                                for i in range(len(self._ansatz))]
         elif self._init_params == "avqite":
-            self._params = self._params_solution.copy()
+            self.params = self._params_solution.copy()
         elif type(self._init_params)==list and len(self._init_params)==len(self._ansatz):
-            self._params = self._init_params.copy()
+            self.params = self._init_params.copy()
         else:
             raise NotImplementedError(
                 "self._init_params has to be either random, avqite, or a list"
@@ -182,24 +181,32 @@ class Quimb_vqite:
             raise ValueError(
                 "Reference state is supposed to be a string of 0s and 1s"
             )
-        #Creates a set and saves of gates in Quimb corresponding to Pauli rotations
+        #Creates and saves a set of gates in Quimb corresponding to Pauli rotations
         #(and their inverse) from the ansatz.
         #This will be used throghout the calculations.
-        self._pauli_rot_gates_list = [
+        #Here we create separate lists for circuits and for gates because Quimb does
+        #not have functionality to reparameterize gates, only circuits.
+        self._pauli_rot_circuits_list = [
             add_pauli_rotation_gate(
                 qc=qtn.Circuit(N=self._num_qubits),
                 pauli_string=self._ansatz[i],
-                theta=self._params[i],
+                theta=self.params[i],
                 decompose_rzz=False
-            ).gates for i in range(len(self._ansatz))
+            ) for i in range(len(self._ansatz))     
+        ]        
+        self._pauli_rot_gates_list = [
+            self._pauli_rot_circuits_list[i].gates for i in range(len(self._ansatz))
+        ]
+        self._pauli_rot_dag_circuits_list = [
+            add_pauli_rotation_gate(
+                qc=qtn.Circuit(N=self._num_qubits),
+                pauli_string=self._ansatz[i],
+                theta=-self.params[i],
+                decompose_rzz=False
+            ) for i in range(len(self._ansatz))
         ]
         self._pauli_rot_dag_gates_list = [
-            add_pauli_rotation_gate(
-                qc=qtn.Circuit(N=self._num_qubits),
-                pauli_string=self._ansatz[i],
-                theta=-self._params[i],
-                decompose_rzz=False
-            ).gates for i in range(len(self._ansatz))
+           self._pauli_rot_dag_circuits_list[i].gates for i in range(len(self._ansatz))
         ]
         #Creates and saves circuits in Quimb correspondning to the product of
         #Pauli rotations up to mu'th rotation in the ansatz list, where
@@ -207,6 +214,38 @@ class Quimb_vqite:
         #This will be used throghout the calculations.
         self._base_circuits = [self.circuit_2(mu)
                                     for mu in range(len(self._ansatz)+1)]
+
+
+    def update_params(self):
+        """
+        Update self._pauli_rot_circuits_list, self._pauli_rot_gates_list, 
+        self._pauli_rot_dag_circuits_list, self._pauli_rot_dag_gates_list,
+        and self._base_circuits for the current values of self.params.
+        """
+        for k in range(len(self._ansatz)):
+            old_params_dict = self._pauli_rot_circuits_list[k].get_params()
+            new_params_dict = dict()
+            for i,key in enumerate(old_params_dict.keys()):
+                new_params_dict[key]= np.array([self.params[k]])
+            self._pauli_rot_circuits_list[k].set_params(new_params_dict)
+        self._pauli_rot_gates_list = [
+            self._pauli_rot_circuits_list[k].gates for k in range(len(self._ansatz))
+        ]
+        for k in range(len(self._ansatz)):
+            old_params_dict = self._pauli_rot_dag_circuits_list[k].get_params()
+            new_params_dict = dict()
+            for i,key in enumerate(old_params_dict.keys()):
+                new_params_dict[key]= np.array([-self.params[k]])
+            self._pauli_rot_dag_circuits_list[k].set_params(new_params_dict)
+        self._pauli_rot_dag_gates_list = [
+           self._pauli_rot_dag_circuits_list[k].gates for k in range(len(self._ansatz))
+        ]
+        for mu in range(len(self._ansatz)+1):
+            old_params_dict = self._base_circuits[mu].get_params()
+            new_params_dict = dict()
+            for i,key in enumerate(old_params_dict.keys()):
+                new_params_dict[key]= np.array([self.params[i]])
+            self._base_circuits[mu].set_params(new_params_dict)    
 
 
     def compute_m(self, which_nonzero=None, **kwargs):
@@ -315,9 +354,9 @@ class Quimb_vqite:
         """
 
 
-        bins_sizes = [int(len(self._params)/self._size) for i in range(self._size)]
+        bins_sizes = [int(len(self.params)/self._size) for i in range(self._size)]
         
-        for i in range(len(self._params) - int(len(self._params)/self._size)*self._size):
+        for i in range(len(self.params) - int(len(self.params)/self._size)*self._size):
             bins_sizes[i] = bins_sizes[i]+1
 
         start = sum(bins_sizes[:self._rank])
@@ -326,9 +365,9 @@ class Quimb_vqite:
         v_iterm = np.zeros(end-start) 
         
         for i,mu in enumerate(range(start, end)):
-            params1 = self._params.copy()
+            params1 = self.params.copy()
             params1[mu] = params1[mu]+np.pi/2
-            params2 = self._params.copy()
+            params2 = self.params.copy()
             params2[mu] = params2[mu]-np.pi/2
             v_iterm[i] = np.real(
                 -1/2*(
@@ -428,10 +467,11 @@ class Quimb_vqite:
             self.compute_v(optimize=optimize_v,**kwargs)
             t3 = MPI.Wtime()
             dthdt = self.get_dthdt(delta = delta, m = self._m, v= self._v)
-            params_new = [p + pp*dt for p, pp in zip(self._params, dthdt)]
-            self._params = params_new
+            params_new = [p + pp*dt for p, pp in zip(self.params, dthdt)]
+            self.params = params_new
+            self.update_params()
             self._e = self.h_exp_val(
-                params = self._params,
+                params = self.params,
                 optimize = optimize_v,
                 **kwargs
             )
