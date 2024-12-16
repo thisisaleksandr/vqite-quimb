@@ -632,6 +632,10 @@ class Quimb_vqite:
         )
         for i in reversed(range(nu)):
             qc.apply_gates(self._pauli_rot_dag_gates_list[i], contract=False)
+
+        [self._init_qc.apply_gate('X',i)
+                            for i,el in enumerate(self._ref_state) if el=='1']
+
         return qc
 
 
