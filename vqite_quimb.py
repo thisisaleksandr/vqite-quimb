@@ -157,7 +157,7 @@ class Quimb_vqite:
         if self._init_params == "random":
             self.params = [self._params_solution[i]+random.uniform(-0.05, 0.05)
                                               for i in range(len(self._ansatz))]
-        if self._init_params == "zeros":
+        elif self._init_params == "zeros":
             self.params = [0.0 for i in range(len(self._ansatz))]
         elif self._init_params == "avqite":
             self.params = self._params_solution.copy()
