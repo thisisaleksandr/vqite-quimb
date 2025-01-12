@@ -348,18 +348,19 @@ class Quimb_vqite:
             self._m_cost[ind_list[i][::-1]] = m_nonzero_cost[i]
 
 
-    def compute_v(self, **kwargs):
+    def compute_v(self, optimize = 'greedy', **kwargs):
         """
         Computes vector V in VQITE in parallel using parameter shift rule.
-        Each parallel process calculates a different part of the vector.
+        Each parallel process calculates the expectationvalue of a particular
+        Pauli string in the Hamiltonian.
 
         Parameters:
         -----------
+        optimize : str or dict
+            Optimizer to use when looking for contraction paths.
         **kwargs
             Arguments used in Quimb methods for tensor contraction
             evaluations, such as:
-                optimize : str
-                    Optimizer to use when looking for contraction paths.
                 simplify_sequence : str
                     TN simplifications to use when looking for contraction paths.
                 backend : str
@@ -367,35 +368,78 @@ class Quimb_vqite:
                     Usually specified if GPU acceleration is needed.
                 ...
         """
-        bins_sizes = [int(len(self.params)/self._size)
+
+        n_of_exp_vals = len(self.params)*2*len(self._H.paulis)
+
+        self._exp_vals = np.zeros(n_of_exp_vals)
+
+        bins_sizes = [int(n_of_exp_vals/self._size)
                                         for i in range(self._size)]
-        for i in range(len(self.params) -
-                            int(len(self.params)/self._size)*self._size):
+        for i in range(n_of_exp_vals -
+                            int(n_of_exp_vals/self._size)*self._size):
             bins_sizes[i] = bins_sizes[i]+1
         start = sum(bins_sizes[:self._rank])
         end = start + bins_sizes[self._rank]
 
-        v_iterm = np.zeros(end-start)
+        exp_vals_iterm = np.zeros(end-start)
 
-        for i,mu in enumerate(range(start, end)):
-            params1 = self.params.copy()
-            params1[mu] = params1[mu]+np.pi/2
-            params2 = self.params.copy()
-            params2[mu] = params2[mu]-np.pi/2
-            v_iterm[i] = np.real(
-                -1/2*(
-                    self.h_exp_val(params=params1, **kwargs) -
-                    self.h_exp_val(params=params2, **kwargs)
-                ) / 2
-            )
+        for i,ind in enumerate(range(start, end)):
+            #parameter index for this process
+            mu = int(int(ind/len(self._H.paulis))/2)
+
+            params = self.params.copy()
+            #parameter shift rule
+            if int(ind/len(self._H.paulis)) % 2 == 0:
+                params[mu] = params[mu]+np.pi/2
+            else:
+                params[mu] = params[mu]-np.pi/2
+
+            qc = self._base_circuits[-1].copy()
+            #update parameters
+            old_params_dict = qc.get_params()
+            new_params_dict = dict()
+            for j,key in enumerate(old_params_dict.keys()):
+                new_params_dict[key]= np.array([params[j]])
+            qc.set_params(new_params_dict)
+
+            pauli_str_ind = ind % len(self._H.paulis)
+            pauli_str = self._H.paulis[pauli_str_ind]
+
+            if type(optimize) == dict:
+                exp_vals_iterm[i] = np.real(p_str_exp_eval(
+                    qc=qc,
+                    pauli_str=pauli_str,
+                    optimize = optimize[pauli_str],
+                    **kwargs
+                ))
+            else:
+                exp_vals_iterm[i] = np.real(p_str_exp_eval(
+                    qc=qc,
+                    pauli_str=pauli_str,
+                    optimize = optimize,
+                    **kwargs
+                ))
 
         sendcountes=tuple(bins_sizes)
         displacements=tuple([sum(bins_sizes[:i]) for i in range(self._size)])
-
+        #collecting an array of the expectation values for all Pauli strings
         self._comm.Allgatherv(
-            [v_iterm,  MPI.DOUBLE],
-            [self._v, sendcountes, displacements, MPI.DOUBLE]
+            [exp_vals_iterm,  MPI.DOUBLE],
+            [self._exp_vals, sendcountes, displacements, MPI.DOUBLE]
         )
+        #computing Hamiltonian expectation values for different parameters
+        H_exp_vals = [
+            sum([self._exp_vals[param_ind*len(self._H.coefs)+i]*self._H.coefs[i]
+                for i in range(len(self._H.coefs))]
+            )
+            for param_ind in range(len(self.params)*2)
+        ]
+        self._v = [
+            np.real(
+                -1/2*(H_exp_vals[param_ind*2] - H_exp_vals[param_ind*2+1]) / 2
+            )
+            for param_ind in range(len(self.params))
+        ]
 
 
     def get_dthdt(self, delta, m, v):
@@ -470,6 +514,10 @@ class Quimb_vqite:
                 self.which_nonzero = [(non_zero_els[0][i],non_zero_els[1][i])
                                     for i in range(len(non_zero_els[0]))
                                     if non_zero_els[0][i]<=non_zero_els[1][i]]
+                if self._rank==0:
+                    with open(self._output_file, "a") as f:
+                        print("# of nonzero elements of M: ",
+                              len(self.which_nonzero), file=f)
             else:
                 #For iterations after the first one, need to compute only
                 #nonzero elements

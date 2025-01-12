@@ -18,14 +18,55 @@ set_of_params=[(filename,
                 optimize_m,
                 optimize_v,
                 simplify_sequence) 
-               for filename in ["N12g0.5","N12g0.8"]
+               for filename in ["N12g0.8"]
                for init_params in ["zeros"]
                for optimize_m in ["greedy"]
                for optimize_v in ["greedy"]
-               for simplify_sequence in ['""']
+               for simplify_sequence in ["ADCRS"]
               ]
-n_tasks_per_node = 128
-n_nodes = 1
+
+# set_of_params=[(filename,
+#                 init_params,
+#                 optimize_m,
+#                 optimize_v,
+#                 simplify_sequence) 
+#                for filename in ["N12g1.0"]
+#                for init_params in ["random"]
+#                for optimize_m in ["greedy"]
+#                for optimize_v in ["greedy"]
+#                for simplify_sequence in ['""']
+#               ]
+
+# set_of_params=[(filename,
+#                 init_params,
+#                 optimize_m,
+#                 optimize_v,
+#                 simplify_sequence) 
+#                for filename in ["N12g0.8"]
+#                for init_params in ["zeros"]
+#                for optimize_m in ["hyper"]
+#                for optimize_v in ["greedy","hyper"]
+#                for simplify_sequence in ['""',"CRS"]
+#               ]
+
+# set_of_params=[(filename,
+#                 init_params,
+#                 optimize_m,
+#                 optimize_v,
+#                 simplify_sequence) 
+#                for filename in ["N12g0.1","N12g0.5","N12g0.8","N12g1.0","N12g1.2","N12g1.5"]
+#                for init_params in ["zeros","random"]
+#                for optimize_m in ["greedy","hyper"]
+#                for optimize_v in ["greedy","hyper"]
+#                for simplify_sequence in ['""',"CRS","ADCRS"]
+#               ]
+
+
+#n_tasks_per_node = 64 (i.e. 2 CPUs per task) appears to be the best option.
+#Calculating M is significantly faster in this case than for n_tasks_per_node = 128
+#Further increasing cpus_per_task does not seem to improve the speed.
+n_tasks_per_node = 64
+n_nodes = 20
 n_tasks = n_tasks_per_node*n_nodes
 #Despite the fact that in NERSC manual cpus_per_task is indicated to be 
 #equal to 2*int(128/n_tasks_per_node), SLURM gives an error when submitting
@@ -46,8 +87,8 @@ for params in set_of_params:
         fh.writelines("#SBATCH -A m529\n")
         fh.writelines("#SBATCH -C cpu\n")
 
-        fh.writelines("#SBATCH --qos=debug\n")
-        fh.writelines("#SBATCH -t 00:30:00\n")
+        fh.writelines("#SBATCH --qos=premium\n")
+        fh.writelines("#SBATCH -t 24:00:00\n")
         fh.writelines("#SBATCH --nodes=%s\n" % n_nodes)
         fh.writelines("#SBATCH --ntasks-per-node=%s\n" % n_tasks_per_node)
         fh.writelines("#SBATCH --cpus-per-task=%s\n" % cpus_per_task)
