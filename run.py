@@ -2,7 +2,6 @@ import numpy as np
 import scipy
 import pickle
 import time
-from tqdm import tqdm
 from typing import (
     List,
     Optional,
@@ -13,6 +12,7 @@ import random
 import importlib
 from mpi4py import MPI
 import argparse
+import os
 
 import quimb as qu
 import quimb.tensor as qtn
@@ -38,6 +38,7 @@ parser.add_argument(
     "-i",
     "--init_params",
     type = str,
+    default="random",
     metavar = '\b',
     help = "initial parameters"
 )
@@ -45,6 +46,7 @@ parser.add_argument(
     "-om",
     "--optimize_m",
     type = str,
+    default="greedy",
     metavar = '\b',
     help = "optimizer to use when computing matrix M"
 )
@@ -52,6 +54,7 @@ parser.add_argument(
     "-ov",
     "--optimize_v",
     type = str,
+    default="greedy",
     metavar = '\b',
     help = "optimizer to use when computing vector V"
 )
@@ -59,6 +62,7 @@ parser.add_argument(
     "-s",
     "--simplify_sequence",
     type = str,
+    default="ADCRS",
     metavar = '\b',
     help = "simplification sequence to use by quimb."
 )
@@ -74,8 +78,10 @@ optimize_m = args.optimize_m
 optimize_v = args.optimize_v
 simplify_sequence = args.simplify_sequence
 
-incar_file = "adaptvqite/adaptvqite/incars/incar"+filename
-ansatz_file = "adaptvqite/adaptvqite/data/ansatz_inp"+filename+".pkle"
+incar_file = f"incars/incar{filename}"
+ansatz_file = f"data_adaptvqite/{filename}/ansatz_inp.pkle"
+
+os.makedirs('outputs', exist_ok=True)
 output_file = ("outputs/output"+filename+"n"+str(size)+"_"+init_params+
                "_om"+optimize_m+"_ov"+optimize_v+"_s"+simplify_sequence+".txt")
 

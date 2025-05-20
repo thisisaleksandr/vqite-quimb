@@ -14,13 +14,15 @@ mpi4py version = 3.1.4
 Quimb version = 1.8.4 (errors can occur for the version 1.9.0)
 Cotengra version = 0.6.2
 Autoray version = 0.7.0
+For contegra:
+pip install autoray cmaes cotengrust cytoolz kahypar loky networkx opt_einsum optuna tqdm
+
 """
 
 import numpy as np
 import scipy
 import pickle
 import time
-from tqdm import tqdm
 from typing import (
     List,
     Optional,
